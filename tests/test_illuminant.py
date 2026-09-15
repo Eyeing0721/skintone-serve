@@ -166,13 +166,30 @@ def test_both_paths_report_whether_the_prior_was_applied() -> None:
     assert nudged["cct"] < plain["cct"]
 
 
-def test_screen_guess_is_the_selfie_scene() -> None:
-    """「屏幕光 + 室内灯」是自拍的现实场景，应当把色温往 4800K 一带拉。
+def test_illuminant_guess_literal_matches_the_prior_tables() -> None:
+    """``IlluminantGuess`` 与先验表必须一致——这正是我漏过一次的地方。
 
-    屏幕背光是冷白 LED（约 6500K），室内灯约 4000K，混合后取 4800K。
-    它是前端的默认项——最该猜对的情况不该丢给算法。
+    我把 ``screen`` 加进了先验表却忘了加进 Literal，于是前端一用新默认值就被
+    pydantic 挡成 422（"Input should be 'daylight', 'shade', ..."），而单元测试
+    因为没覆盖这个组合照样全绿。这条守卫让两处无法再各自漂移。
     """
-    assert config.ILLUMINANT_GUESS_CCT["screen"] == pytest.approx(4800.0)
+    from typing import get_args
+
+    from skintone import schemas
+
+    literal = set(get_args(schemas.IlluminantGuess))
+    table = set(config.ILLUMINANT_GUESS_CCT)
+    assert literal == table, f"Literal 与先验表不一致：{literal ^ table}"
+    assert set(config.ILLUMINANT_GUESS_LOCUS) == table
+
+
+def test_screen_guess_is_the_selfie_scene() -> None:
+    """「屏幕光 + 室内灯」是自拍的现实场景。
+
+    **关键：屏幕此时显示的是摄像头里的脸和这个暖纸色网页**，所以它投出来的光
+    是被暖色内容调制过的，不是冷白屏。混合后落在 4000K 附近。
+    """
+    assert config.ILLUMINANT_GUESS_CCT["screen"] == pytest.approx(4000.0)
     assert config.ILLUMINANT_GUESS_LOCUS["screen"] == "planckian"
 
     xy = illuminant.planck_xy(6500.0)
@@ -180,9 +197,9 @@ def test_screen_guess_is_the_selfie_scene() -> None:
     screen = illuminant.solve_illuminant(xy, "test", "screen")
     assert screen["priorApplied"] is True
     assert screen["locus"] == "planckian"
-    # 比实测的 6500K 更暖，但不会跑到暖黄灯那一档
+    # 比实测的 6500K 明显更暖；但不该一路跑到白炽灯（2856K）那一档
     assert screen["cct"] < plain["cct"]
-    assert screen["cct"] > config.ILLUMINANT_GUESS_CCT["tungsten"]
+    assert screen["cct"] > config.ILLUMINANT_GUESS_CCT["tungsten"] * 1.2
 
 
 def test_solve_illuminant_requires_a_measurement() -> None:
