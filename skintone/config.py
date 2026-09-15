@@ -306,9 +306,7 @@ ADVICE_AVOID_CHROMA_MAX = 12.0
 CONTRAST_LEVEL_CUTS = (("high", 45.0), ("medium", 25.0))
 CONTRAST_LEVEL_LOW = "low"
 
-DISCLAIMER = (
-    "本结果基于单张照片的相机响应估计，不能替代分光测色仪或专业色彩顾问。"
-)
+DISCLAIMER = "结果只根据这一张照片估出来，和仪器实测会有差别。"
 
 # ---------------------------------------------------------------------------
 # Haar cascades (shipped with opencv-python-headless, zero download)
