@@ -208,6 +208,12 @@ class IlluminantInfo(_Model):
     xy: list[float] | None
     adaptation: str
     assumedD65: bool
+    #: 投影到哪条物理轨迹上：``planckian`` / ``daylight`` / ``None``。
+    locus: str | None = None
+    #: 用户选的光源先验是否真的改变了结果（选了"不确定"时为 False）。
+    priorApplied: bool = False
+    #: 先验拿到的权重；0 表示被忽略。
+    priorWeight: float | None = None
 
 
 class PerPatchDelta(_Model):

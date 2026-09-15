@@ -5,6 +5,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
+from skintone import config
 from skintone.color import adaptation, illuminant
 from skintone.color.srgb import D65_XYZ, white_xyz_from_xy
 
@@ -117,6 +118,52 @@ def test_solve_illuminant_can_assume_d65() -> None:
     solved = illuminant.solve_illuminant(None, "d65-assumed", assumed_d65=True)
     assert solved["assumedD65"] is True
     assert solved["cct"] == pytest.approx(6504.0, abs=1.0)
+
+
+@pytest.mark.parametrize(
+    ("guess", "direction"),
+    [("tungsten", "warmer"), ("fluorescent", "warmer"), ("shade", "cooler")],
+)
+def test_d65_fallback_honours_a_known_guess(guess: str, direction: str) -> None:
+    """采不到任何中性参考面时，用户选的光源必须真的改变结果。
+
+    回归防线：这里原本在调用处硬写了 ``prior_weight=0.0``，而且
+    ``solve_illuminant`` 在无测量时直接提前 return 了 D65，于是
+    ``ILLUMINANT_PRIOR_WEIGHT_D65_FALLBACK`` 成了永不生效的死配置——
+    白炽灯下拍的照片会被按日光处理，而那恰恰是先验最该发挥作用的场景。
+    """
+    solved = illuminant.solve_illuminant(None, "d65-assumed", guess, assumed_d65=True)
+    assert solved["assumedD65"] is True
+    assert solved["priorApplied"] is True
+    assert solved["priorWeight"] == pytest.approx(
+        config.ILLUMINANT_PRIOR_WEIGHT_D65_FALLBACK
+    )
+    if direction == "warmer":
+        assert solved["cct"] < illuminant.D65_CCT_K
+    else:
+        assert solved["cct"] > illuminant.D65_CCT_K
+
+
+def test_d65_fallback_ignores_an_unknown_guess() -> None:
+    """选"不确定"时不该凭空偏向任何色温。"""
+    solved = illuminant.solve_illuminant(None, "d65-assumed", "unknown", assumed_d65=True)
+    assert solved["cct"] == pytest.approx(illuminant.D65_CCT_K)
+    assert solved["priorApplied"] is False
+    assert solved["priorWeight"] == 0.0
+
+
+def test_both_paths_report_whether_the_prior_was_applied() -> None:
+    """先验有没有生效必须可查——否则界面上那个下拉框就是个黑盒。"""
+    xy = illuminant.daylight_xy(5000.0)
+    plain = illuminant.solve_illuminant(xy, "test", "unknown")
+    assert plain["priorApplied"] is False
+    assert plain["priorWeight"] == 0.0
+
+    nudged = illuminant.solve_illuminant(xy, "test", "tungsten")
+    assert nudged["priorApplied"] is True
+    assert nudged["priorWeight"] == pytest.approx(config.ILLUMINANT_PRIOR_WEIGHT)
+    # 白炽灯先验应当把色温往暖里拉
+    assert nudged["cct"] < plain["cct"]
 
 
 def test_solve_illuminant_requires_a_measurement() -> None:

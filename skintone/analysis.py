@@ -390,9 +390,9 @@ def _estimate_illuminant_nocard(
         parts.append((name, np.asarray(xyz_to_xy(linear_rgb_to_xyz(median_linear))), weight))
 
     if not parts:
-        solved = solve_illuminant(
-            None, "d65-assumed", illuminant_guess, prior_weight=0.0, assumed_d65=True
-        )
+        # 采不到任何中性参考面：交给 solve_illuminant 用用户选的光源做回退，
+        # 它会在 D65 与先验之间按 ILLUMINANT_PRIOR_WEIGHT_D65_FALLBACK 混合。
+        solved = solve_illuminant(None, "d65-assumed", illuminant_guess, assumed_d65=True)
         solved["sources"] = []
         return solved
 
@@ -770,10 +770,10 @@ def analyze(
         }
 
         white_xy = card_vision.card_white_xy(samples)
+        # 比色卡模式刻意禁用先验：卡已经真的测出了光源，用户的猜测掺进去只会更差。
         illuminant = solve_illuminant(
             white_xy, "card", meta.capture.illuminantGuess, prior_weight=0.0
         )
-        illuminant.pop("locus", None)
 
         if stats.median_linear_rgb is None:
             skin_block = _empty_skin_block(stats)
@@ -788,10 +788,15 @@ def analyze(
             image_bgr, faces, exclude, meta.capture.illuminantGuess
         )
         sources = illuminant.pop("sources", [])
-        illuminant.pop("locus", None)
         measured_gates["illuminant_residual"] = abs(float(illuminant["duv"] or 0.0))
         if not sources:
-            warnings.append("未找到眼白/牙齿/背景等非皮肤中性面，光源色温按 D65 处理")
+            # 采不到中性面时不再一刀切按 D65：若用户选了具体光源，会以更高权重
+            # 把先验与 D65 混合（见 color/illuminant.py），所以提示语也要跟上。
+            warnings.append(
+                "未找到眼白/牙齿/背景等非皮肤中性面，已按你选择的拍摄光源估算色温"
+                if illuminant.get("priorApplied")
+                else "未找到眼白/牙齿/背景等非皮肤中性面，光源色温按 D65 处理"
+            )
         else:
             warnings.append("光源估计使用的候选来源：" + "、".join(sources))
         warnings.append(
@@ -848,6 +853,14 @@ def analyze(
             else [round(float(value), 5) for value in illuminant["xy"]],
             "adaptation": DEFAULT_ADAPTATION,
             "assumedD65": bool(illuminant.get("assumedD65", False)),
+            # 让"用户选的光源到底有没有生效"可查。
+            # 注意：schema 里这三个字段带默认值，所以漏了透传也不会报错——
+            # 只有断言 priorApplied 真正为 True 的测试才拦得住（见 test_api.py）。
+            "locus": illuminant.get("locus"),
+            "priorApplied": bool(illuminant.get("priorApplied", False)),
+            "priorWeight": None
+            if illuminant.get("priorWeight") is None
+            else round(float(illuminant["priorWeight"]), 3),
         },
         "calibration": calibration_block,
         "skin": skin_block,

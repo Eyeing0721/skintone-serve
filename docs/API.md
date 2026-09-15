@@ -56,6 +56,19 @@
 `skin`（`labD65` / `itaDeg` / `depthClass` / `hueAngleDeg` / `chroma` / `undertone` /
 `melaninIndex` / `hemoglobinIndex`）、`advice`、`warnings`、`disclaimer`。
 
+`illuminant` 除了契约的 `method` / `cct` / `duv` / `xy` / `adaptation` / `assumedD65`，
+还有三个字段用来说明**用户选的光源（`capture.illuminantGuess`）到底有没有起作用**：
+
+| 字段 | 含义 |
+|---|---|
+| `locus` | 估计被投影到哪条物理轨迹：`planckian` / `daylight` / `null`（纯 D65 回退） |
+| `priorApplied` | 用户的选择是否真的改变了结果（选 `unknown` 时为 `false`） |
+| `priorWeight` | 先验拿到的权重；0 表示被忽略 |
+
+先验的行为：正常情况下权重 `0.25`，只在实测值的基础上**轻推**（不覆盖实测）；
+一个中性参考面都采不到时改为 `0.60` 与 D65 混合；**比色卡模式下刻意禁用**
+（`0.0`），因为色卡已经真的测出了光源，让用户的猜测掺进去只会让它变差。
+
 `confidence.level = "insufficient"` 时 `advice` 为 `null`——这是有意设计，
 不是缺陷。请前端据此引导用户改做物理试色。
 

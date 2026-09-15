@@ -430,7 +430,9 @@ def solve_illuminant(
     Returns:
         A dict with ``method``, ``cct`` (kelvin), ``duv`` (signed CIE 1960 uv
         offset), ``xy`` (the *corrected* chromaticity, i.e. the locus point at the
-        final CCT) and ``assumedD65``.
+        final CCT), ``assumedD65``, ``locus``, plus ``priorApplied`` /
+        ``priorWeight`` so callers can tell whether the user's guess actually
+        changed the result.
 
     Raises:
         ValueError: if ``xy_estimate`` is ``None`` and ``assumed_d65`` is False.
@@ -438,12 +440,41 @@ def solve_illuminant(
     if xy_estimate is None:
         if not assumed_d65:
             raise ValueError("xy_estimate is required unless assumed_d65 is True")
+        # 一个中性参考面都采不到时（无眼白 / 牙齿 / 背景候选），用户选的光源就是
+        # 唯一可用的信息。此时**不能一刀切假定 D65**：白炽灯下拍的照片按日光处理
+        # 会明显偏色。用更高的权重（ILLUMINANT_PRIOR_WEIGHT_D65_FALLBACK）把先验
+        # 和 D65 混合——这正是先验最该发挥作用的场景。
+        known = (
+            illuminant_guess in config.ILLUMINANT_GUESS_CCT
+            and illuminant_guess != "unknown"
+        )
+        if known:
+            weight = config.ILLUMINANT_PRIOR_WEIGHT_D65_FALLBACK
+            blended = (1.0 - weight) * mired(D65_CCT_K) + weight * mired(
+                config.ILLUMINANT_GUESS_CCT[illuminant_guess]
+            )
+            cct = from_mired(blended)
+            locus = config.ILLUMINANT_GUESS_LOCUS.get(illuminant_guess)
+            corrected = locus_xy_at_cct(cct, locus)
+            return {
+                "method": method,
+                "cct": float(cct),
+                "duv": 0.0,
+                "xy": [float(corrected[0]), float(corrected[1])],
+                "assumedD65": True,
+                "locus": locus,
+                "priorApplied": True,
+                "priorWeight": float(weight),
+            }
         return {
             "method": method,
             "cct": D65_CCT_K,
             "duv": 0.0,
             "xy": list(D65_XY),
             "assumedD65": True,
+            "locus": None,
+            "priorApplied": False,
+            "priorWeight": 0.0,
         }
 
     locus_hint = config.ILLUMINANT_GUESS_LOCUS.get(illuminant_guess)
@@ -468,4 +499,6 @@ def solve_illuminant(
         "xy": [float(corrected_xy[0]), float(corrected_xy[1])],
         "assumedD65": bool(assumed_d65),
         "locus": locus,
+        "priorApplied": bool(prior_weight > 0.0),
+        "priorWeight": float(prior_weight),
     }

@@ -276,6 +276,40 @@ def test_cors_headers_are_present(client: TestClient) -> None:
     assert "x-api-key" in allow_headers or "*" in allow_headers
 
 
+def test_illuminant_prior_is_reported_as_applied(client: TestClient) -> None:
+    """"照片光源"选了具体值时，响应必须承认先验确实生效了。
+
+    回归防线：schema 里 locus / priorApplied / priorWeight 都带默认值，
+    所以装配处漏了透传**不会报错**，契约键测试也照样通过。只有这条断言
+    priorApplied 真正为 True 的测试才拦得住（实测中确实漏过一次）。
+    """
+    meta = _nocard_meta()
+    meta["capture"] = {**meta["capture"], "illuminantGuess": "tungsten"}
+    response = client.post(
+        "/v1/analyze",
+        files={"image": ("x.jpg", synthetic.encode_jpeg(np.full((60, 60, 3), 170, dtype=np.uint8)), "image/jpeg")},
+        data={"meta": json.dumps(meta), "rois": json.dumps(_square_rois(60))},
+    )
+    assert response.status_code == 200, response.text
+    light = response.json()["illuminant"]
+    assert light["priorApplied"] is True
+    assert light["priorWeight"] == 0.25
+    assert light["locus"] == "planckian"  # 白炽灯挂在普朗克轨迹上
+
+
+def test_illuminant_prior_is_reported_as_ignored_when_unknown(client: TestClient) -> None:
+    """选"不确定"时必须如实报告"先验没参与"，不能假装用了。"""
+    response = client.post(
+        "/v1/analyze",
+        files={"image": ("x.jpg", synthetic.encode_jpeg(np.full((60, 60, 3), 170, dtype=np.uint8)), "image/jpeg")},
+        data={"meta": json.dumps(_nocard_meta()), "rois": json.dumps(_square_rois(60))},
+    )
+    assert response.status_code == 200, response.text
+    light = response.json()["illuminant"]
+    assert light["priorApplied"] is False
+    assert light["priorWeight"] == 0.0
+
+
 def test_cors_headers_apply_to_error_responses(tmp_path: Path) -> None:
     """The guard must sit *inside* CORS so 401s are still browser-readable."""
     secured = config.Settings(data_dir=tmp_path / "data", api_key="k", rate_limit="1000/minute")
@@ -316,6 +350,11 @@ def test_response_contains_every_contract_key(client: TestClient) -> None:
         "xy",
         "adaptation",
         "assumedD65",
+        # 契约 §2.3 的扩展字段：让"用户选的光源有没有生效"可查，
+        # 而不是一个黑盒下拉框（见 tests/test_illuminant.py 的回归防线）。
+        "locus",
+        "priorApplied",
+        "priorWeight",
     }
     assert set(body["skin"]) == {
         "roi",
