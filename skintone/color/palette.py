@@ -51,12 +51,29 @@ def _hue_name(hue_deg: float) -> str:
     return name
 
 
+#: 彩度低于这个值时，色相在感知上已经很弱——按色相命名会**误导**。
+#: 实测：#967778 的 C*≈10、hue≈40°，旧规则叫它"橙"，但它看起来是灰褐色；
+#: #68594c 的 C*≈9 被叫"灰紫"，其实是一块暖棕。低彩度一律归到中性的棕/米/灰。
+_NAME_CHROMA_FLOOR = 18.0
+
+
 def _colour_name(lab: np.ndarray) -> str:
-    """Describe a CIELAB colour with a lightness/chroma qualifier plus hue name."""
+    """Describe a CIELAB colour with a plain Chinese name.
+
+    Naming is deliberately chroma-aware: at low ``C*`` the hue angle carries
+    almost no perceptual information, so a hue name would be actively
+    misleading. Those colours get the neutral brown/cream/grey family instead.
+    """
     lightness, chroma_value, hue = (float(v) for v in lab_to_lch(lab))
+    if chroma_value < 8.0:
+        return "灰"
+    if chroma_value < _NAME_CHROMA_FLOOR:
+        if lightness < 35.0:
+            return "深棕"
+        if lightness > 78.0:
+            return "浅米"
+        return "棕"
     hue_name = _hue_name(hue)
-    if chroma_value < 12.0:
-        return f"灰{hue_name}"
     if lightness < 35.0:
         return f"深{hue_name}"
     if lightness > 78.0:
