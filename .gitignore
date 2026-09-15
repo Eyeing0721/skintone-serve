@@ -1,0 +1,28 @@
+# 运行时数据：绝不要提交用户照片
+data/
+
+# 密钥与凭据
+.env
+*.pem
+.cloudflared-token
+*credentials*.json
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
+dist/
+build/
+
+# 探针/临时脚本
+scratch_*.py
+
+# 编辑器与系统
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

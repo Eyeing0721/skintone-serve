@@ -1,0 +1,16 @@
+# skintone-serve dependencies.
+# Contract 8: ONLY the packages below are allowed.
+# No colour-science / scikit-image / scipy: all colour science is implemented in
+# skintone/color/ so every number in a response stays auditable.
+fastapi==0.115.6
+uvicorn[standard]==0.34.0
+python-multipart==0.0.20
+pydantic==2.10.4
+pydantic-settings==2.7.0
+numpy==2.2.1
+opencv-python-headless==4.10.0.84
+pillow==11.1.0
+python-json-logger==3.2.1
+# test-only
+pytest==8.3.4
+httpx==0.28.1
