@@ -166,6 +166,25 @@ def test_both_paths_report_whether_the_prior_was_applied() -> None:
     assert nudged["cct"] < plain["cct"]
 
 
+def test_screen_guess_is_the_selfie_scene() -> None:
+    """「屏幕光 + 室内灯」是自拍的现实场景，应当把色温往 4800K 一带拉。
+
+    屏幕背光是冷白 LED（约 6500K），室内灯约 4000K，混合后取 4800K。
+    它是前端的默认项——最该猜对的情况不该丢给算法。
+    """
+    assert config.ILLUMINANT_GUESS_CCT["screen"] == pytest.approx(4800.0)
+    assert config.ILLUMINANT_GUESS_LOCUS["screen"] == "planckian"
+
+    xy = illuminant.planck_xy(6500.0)
+    plain = illuminant.solve_illuminant(xy, "test", "unknown")
+    screen = illuminant.solve_illuminant(xy, "test", "screen")
+    assert screen["priorApplied"] is True
+    assert screen["locus"] == "planckian"
+    # 比实测的 6500K 更暖，但不会跑到暖黄灯那一档
+    assert screen["cct"] < plain["cct"]
+    assert screen["cct"] > config.ILLUMINANT_GUESS_CCT["tungsten"]
+
+
 def test_solve_illuminant_requires_a_measurement() -> None:
     """Asking for a measured illuminant without one must raise."""
     with pytest.raises(ValueError):

@@ -228,7 +228,11 @@ OD_LINEAR_FLOOR = 1e-4
 # ---------------------------------------------------------------------------
 
 #: Nominal CCT (kelvin) for each ``capture.illuminantGuess`` value.
+#: ``screen`` 是自拍的真实场景：屏幕背光（冷白 LED，约 6500K）混着室内的 LED 灯
+#: （约 4000K），实测取 4800K 作为混合后的标称值。它是前端默认项，但**不是
+#: API 的默认值**——API 不该替调用方假定"这是自拍"。
 ILLUMINANT_GUESS_CCT = {
+    "screen": 4800.0,
     "daylight": 6500.0,
     "shade": 7500.0,
     "tungsten": 2856.0,
@@ -238,6 +242,7 @@ ILLUMINANT_GUESS_CCT = {
 }
 #: Kinds that are physically closer to the CIE daylight locus than to Planck.
 ILLUMINANT_GUESS_LOCUS = {
+    "screen": "planckian",
     "daylight": "daylight",
     "shade": "daylight",
     "tungsten": "planckian",

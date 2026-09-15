@@ -30,7 +30,7 @@ UndertoneLabel = Literal[
     "cool", "neutral-cool", "neutral", "neutral-warm", "warm", "olive"
 ]
 IlluminantGuess = Literal[
-    "daylight", "shade", "tungsten", "fluorescent", "led", "unknown"
+    "screen", "daylight", "shade", "tungsten", "fluorescent", "led", "unknown"
 ]
 
 
