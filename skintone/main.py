@@ -13,8 +13,10 @@ route:
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import time
+import weakref
 from contextlib import asynccontextmanager
 from typing import Any, AsyncIterator
 
@@ -85,12 +87,20 @@ def create_app(settings: config.Settings | None = None) -> FastAPI:
     app.state.settings = resolved
     app.state.storage = storage.Storage(resolved.data_dir, resolved.retention_days)
     app.state.started_at = time.monotonic()
-    # 每日配额：防滥用，不是认证。指针可伪造，只求挡住随手刷与填满磁盘。
-    app.state.quota = quota.DailyQuota(
+    # 防滥用闸门：全程不使用客户端 IP —— CGNAT 会让大量真实用户共用出口 IP，
+    # 按 IP 限流必然误伤。具体闸门清单见 skintone/quota.py 的模块说明。
+    app.state.guard = quota.GuardStore(
         resolved.quota_db_path,
-        resolved.quota_per_day_client,
-        resolved.quota_per_day_ip,
+        per_client_per_day=resolved.quota_per_day_client,
+        client_cooldown_seconds=resolved.quota_cooldown_seconds,
+        global_per_day=resolved.quota_global_per_day,
+        global_mb_per_day=resolved.quota_global_mb_per_day,
     )
+    app.state.global_rate_limiter = api.RateLimiter(
+        resolved.global_rate_limit_capacity, resolved.global_rate_limit_per_second
+    )
+    # 按事件循环缓存的并发信号量；用弱引用表避免 id 复用导致拿错对象
+    app.state.analysis_slots = weakref.WeakKeyDictionary()
     app.state.rate_limiter = api.RateLimiter(
         resolved.rate_limit_capacity, resolved.rate_limit_per_second
     )
@@ -140,22 +150,35 @@ def create_app(settings: config.Settings | None = None) -> FastAPI:
 
     @app.middleware("http")
     async def _guard(request: Request, call_next: Any) -> Any:
-        """Enforce size ceiling, rate limit, optional API key and the daily quota."""
+        """Enforce size ceiling, rate limits, optional API key, quota and concurrency."""
         path = request.url.path
         counts_toward_quota = (
             resolved.quota_enabled
             and path.startswith("/v1/")
             and quota.is_quota_target(request.method, path)
         )
+        ident = quota.client_identifier(request)
+        upload_bytes = int(request.headers.get("content-length") or 0)
+        slots = None
+        acquired = False
         try:
             if path.startswith("/v1/") and request.method != "OPTIONS":
                 api.parse_size_guard(request, resolved)
                 if path not in api.PUBLIC_PATHS:
-                    allowed, retry_after = app.state.rate_limiter.check(api.client_key(request))
+                    # 两道短时速率：单指纹一道 + 全站一道。都不用 IP。
+                    allowed, retry_after = app.state.rate_limiter.check(ident)
                     if not allowed:
                         raise schemas.ApiError(
                             "RATE_LIMITED",
                             f"请求过于频繁，已超过 {resolved.rate_limit} 的限制",
+                            f"请在 {retry_after:.0f} 秒后重试",
+                            details={"retryAfterSeconds": round(retry_after, 1)},
+                        )
+                    allowed, retry_after = app.state.global_rate_limiter.check("global")
+                    if not allowed:
+                        raise schemas.ApiError(
+                            "RATE_LIMITED",
+                            "全站请求过于密集",
                             f"请在 {retry_after:.0f} 秒后重试",
                             details={"retryAfterSeconds": round(retry_after, 1)},
                         )
@@ -168,27 +191,38 @@ def create_app(settings: config.Settings | None = None) -> FastAPI:
                                 "在请求头里带上服务端 .env 中配置的 SKINTONE_API_KEY",
                             )
                     if counts_toward_quota:
-                        info = app.state.quota.peek(
-                            quota.client_identifier(request), quota.client_ip(request)
-                        )
+                        info = app.state.guard.check(ident)
+                        info["cooldownSeconds"] = resolved.quota_cooldown_seconds
                         request.state.quota_info = info
-                        if info["remaining"] <= 0:
-                            raise schemas.ApiError(
-                                "RATE_LIMITED",
-                                f"今天的 {info['clientLimit']} 次额度已经用完了",
-                                "明天自动恢复。额度只在对上脸、真正出结果之后才扣，"
-                                "所以失败的那几次不算数",
-                                details=info,
-                            )
+                        if not info["allowed"]:
+                            message, hint = quota.describe_refusal(info)
+                            raise schemas.ApiError("RATE_LIMITED", message, hint, details=info)
+                if counts_toward_quota:
+                    # 并发闸门：分析是 CPU 密集的，排队远好过把机器打满
+                    slots = _analysis_slots(app, resolved)
+                    try:
+                        await asyncio.wait_for(
+                            slots.acquire(), timeout=resolved.queue_wait_seconds
+                        )
+                        acquired = True
+                    except asyncio.TimeoutError:
+                        raise schemas.ApiError(
+                            "RATE_LIMITED",
+                            "服务器正忙",
+                            f"同时进行的分析已达 {resolved.max_concurrent_analyses} 个，"
+                            f"且排队超过 {resolved.queue_wait_seconds:.0f} 秒，请稍后再试",
+                        ) from None
         except schemas.ApiError as error:
             response = _error_response(error)
         else:
-            response = await call_next(request)
-            # 只在真正处理成功后才扣额度：拍糊了、没对上脸，不该白扣一次
+            try:
+                response = await call_next(request)
+            finally:
+                if acquired and slots is not None:
+                    slots.release()
+            # 只有真正出结果才记账：拍糊了、没对上脸，不该白扣一次
             if counts_toward_quota and response.status_code < 400:
-                info = app.state.quota.consume(
-                    quota.client_identifier(request), quota.client_ip(request)
-                )
+                info = app.state.guard.record_success(ident, upload_bytes)
                 request.state.quota_info = info
         # 把剩余额度回给前端，让用户看得到自己还能测几次
         info = getattr(request.state, "quota_info", None)
@@ -216,11 +250,31 @@ def create_app(settings: config.Settings | None = None) -> FastAPI:
             "dataDir": str(resolved.data_dir),
             "authRequired": resolved.auth_required,
             "rateLimit": resolved.rate_limit,
+            "globalRateLimit": resolved.global_rate_limit,
             "quotaPerDayClient": resolved.quota_per_day_client,
-            "quotaPerDayIp": resolved.quota_per_day_ip,
+            "quotaGlobalPerDay": resolved.quota_global_per_day,
+            "quotaGlobalMbPerDay": resolved.quota_global_mb_per_day,
         },
     )
     return app
+
+
+def _analysis_slots(app: FastAPI, settings: config.Settings) -> asyncio.Semaphore:
+    """Concurrency gate for analyse requests, cached **per event loop**.
+
+    An :class:`asyncio.Semaphore` binds to the loop that first awaits it, and a
+    freshly built app can be exercised by several loops (tests build a new
+    ``TestClient`` per case, uvicorn may reload). Creating one semaphore at
+    startup would then raise "bound to a different event loop", so key it by the
+    running loop. ``WeakKeyDictionary`` avoids reusing a stale slot after a loop
+    is collected.
+    """
+    loop = asyncio.get_running_loop()
+    slots = app.state.analysis_slots.get(loop)
+    if slots is None:
+        slots = asyncio.Semaphore(max(1, settings.max_concurrent_analyses))
+        app.state.analysis_slots[loop] = slots
+    return slots
 
 
 def _error_response(error: schemas.ApiError) -> JSONResponse:

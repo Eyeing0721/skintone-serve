@@ -62,7 +62,12 @@ class RateLimiter:
 
 
 def client_key(request: Request) -> str:
-    """Return the rate-limit bucket key for a request (client IP, or ``"local"``)."""
+    """Return the client IP for local debugging.
+
+    Deprecated as a rate-limit key: the guard no longer keys anything on IP,
+    because carrier-grade NAT makes real users share an address. The rate limiter
+    is keyed on the browser fingerprint instead (see ``skintone.quota``).
+    """
     return request.client.host if request.client else "local"
 
 

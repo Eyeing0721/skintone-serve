@@ -31,6 +31,11 @@ def _isolate_from_local_dotenv(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) 
     monkeypatch.setenv("SKINTONE_API_KEY", "")
     monkeypatch.setenv("SKINTONE_ALLOWED_ORIGINS", "*")
     monkeypatch.setenv("SKINTONE_DATA_DIR", str(tmp_path / "env-data"))
+    # 配额另有 tests/test_quota.py 专门覆盖。其余用例不该被每日次数或
+    # 15 秒冷却拦住（例如 test_analysis 里 calibrate 紧接 analyze）。
+    # pydantic-settings 的来源优先级是 init > 环境变量 > dotenv，
+    # 所以显式传 quota_enabled=True 的配额测试仍然照常生效。
+    monkeypatch.setenv("SKINTONE_QUOTA_ENABLED", "false")
 
 
 @pytest.fixture

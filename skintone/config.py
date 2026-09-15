@@ -359,12 +359,24 @@ class Settings(BaseSettings):
     api_key: str = ""
     allowed_origins: str = "*"
     rate_limit: str = "30/minute"
-    #: 每日配额（防滥用，不是认证）。浏览器指纹来自 X-Client-Id，可被伪造；
-    #: 目的只是挡住随手刷与填满磁盘。设为 0 表示该项不限制。
+    #: 每日配额与防滥用闸门（**不是认证**）。刻意不使用客户端 IP：
+    #: CGNAT 会让大量真实用户共用出口 IP，按 IP 限流必然误伤。
     quota_enabled: bool = True
+    #: 单指纹每日次数（X-Client-Id）
     quota_per_day_client: int = 5
-    quota_per_day_ip: int = 5
-    #: 配额库文件；留空则用 data_dir/quota.sqlite
+    #: 单指纹两次成功测量之间的冷却秒数
+    quota_cooldown_seconds: float = 15.0
+    #: 全站每日次数硬天花板——无论对方怎么换指纹都撞得到
+    quota_global_per_day: int = 200
+    #: 全站每日上传字节预算（MB）——直接保护磁盘
+    quota_global_mb_per_day: float = 500.0
+    #: 全站每分钟令牌桶（不依赖任何标识，给洪水限速）
+    global_rate_limit: str = "120/minute"
+    #: 同时进行的分析数上限；超出排队，保护 CPU
+    max_concurrent_analyses: int = 2
+    #: 排队等待上限（秒），超过就明确拒绝而不是无限等
+    queue_wait_seconds: float = 20.0
+    #: 配额库文件；留空则用 data_dir/guard.sqlite
     quota_db: str = ""
     max_upload_mb: int = 20
     data_dir: Path = Path("./data")
@@ -392,8 +404,8 @@ class Settings(BaseSettings):
 
     @property
     def quota_db_path(self) -> Path:
-        """Daily-quota database path (defaults to ``data_dir/quota.sqlite``)."""
-        return Path(self.quota_db) if self.quota_db else self.data_dir / "quota.sqlite"
+        """Guard-store path (defaults to ``data_dir/guard.sqlite``)."""
+        return Path(self.quota_db) if self.quota_db else self.data_dir / "guard.sqlite"
 
     @property
     def max_upload_bytes(self) -> int:
@@ -419,6 +431,16 @@ class Settings(BaseSettings):
     def rate_limit_per_second(self) -> float:
         """Refill rate in tokens per second parsed from ``rate_limit``."""
         return _parse_rate_limit(self.rate_limit)[1]
+
+    @property
+    def global_rate_limit_capacity(self) -> int:
+        """Burst capacity for the site-wide limiter (identifier-free gate)."""
+        return _parse_rate_limit(self.global_rate_limit)[0]
+
+    @property
+    def global_rate_limit_per_second(self) -> float:
+        """Refill rate (tokens/second) for the site-wide limiter."""
+        return _parse_rate_limit(self.global_rate_limit)[1]
 
 
 def _parse_rate_limit(spec: str) -> tuple[int, float]:
