@@ -7,8 +7,10 @@ deliberately conservative:
 2. Reject pixels that carry no colour information: any channel at 250 or above
    (saturated) or at 5 or below (crushed) in encoded sRGB. These are the gate
    ``clipping`` values, measured over the whole ROI.
-3. Reject specular pixels, defined as CIELAB ``L* > 85``. This is the gate
-   ``specular``.
+3. Reject specular pixels, defined **relative to the subject's own skin lightness**
+   (``clamp(median L* + delta, floor, ceil)``, see ``config.SPECULAR_L_*``). An
+   absolute ``L* > 85`` was skin-tone biased: light skin got a large share of its
+   normal pixels rejected. This feeds the ``specular`` gate.
 4. Reduce the survivors with robust statistics -- a per-channel **median** in
    linear light, plus a trimmed mean for diagnostics. Never a plain mean, and
    never in encoded sRGB (contract section 4).
@@ -151,7 +153,18 @@ def compute_roi_stats(
     )
     linear = srgb8_to_linear(np.clip(rgb8, 0, 255).astype(np.uint8))
     lab = linear_rgb_to_lab(linear)
-    specular = lab[:, 0] > config.SPECULAR_L_MAX
+    # 高光要相对"这个人自己的肤色"判定，不能只看绝对值：固定的 L*>85 会让
+    # 浅肤色被大量误判成高光（连带把正常皮肤剔除出中位数），深肤色则几乎
+    # 永不触发——那是肤色偏见。取「肤色中位数 + 抬升」并夹在绝对上下限之间。
+    centre_l = float(np.median(lab[:, 0]))
+    specular_cut = float(
+        np.clip(
+            centre_l + config.SPECULAR_L_DELTA,
+            config.SPECULAR_L_FLOOR,
+            config.SPECULAR_L_CEIL,
+        )
+    )
+    specular = lab[:, 0] > specular_cut
     valid = ~(clipped | specular)
 
     clipping_ratio = float(np.count_nonzero(clipped)) / roi_pixels

@@ -84,8 +84,20 @@ CLIP_HIGH_SRGB8 = 250
 CLIP_LOW_SRGB8 = 5
 CLIP_RATIO_MAX = 0.02
 
-#: Gate ``specular``: fraction of ROI pixels whose CIELAB L* exceeds this.
-SPECULAR_L_MAX = 85.0
+#: Gate ``specular``: 高光必须**相对这个人自己的肤色**判定。
+#:
+#: 只用绝对 ``L* > 85`` 是有肤色偏见的：皮肤越浅，越多正常皮肤被判成高光
+#: （实测：一位 L*≈70 的用户照片与标注都正常，却因 specular 闸门爆掉被判
+#: "测不准"）；反过来深肤色几乎永不触发。而且被误判的像素还会被连带剔除出
+#: 中位数，等于把浅肤色的亮部削掉一截。
+#:
+#: 因此取「肤色中位数 + 抬升」并夹在绝对上下限之间：
+#:   cut = clamp(median_L + SPECULAR_L_DELTA, SPECULAR_L_FLOOR, SPECULAR_L_CEIL)
+#: 浅肤色（median≈75）→ 88，比旧值 85 高一档，误判明显减少；
+#: 深肤色（median≈40）→ 仍为 88，行为不变；整体过曝时 → 95，仍能触发。
+SPECULAR_L_FLOOR = 88.0
+SPECULAR_L_CEIL = 95.0
+SPECULAR_L_DELTA = 10.0
 SPECULAR_RATIO_MAX = 0.08
 
 #: Gate ``roi_area``: number of usable skin pixels after rejection.

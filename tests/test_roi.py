@@ -88,6 +88,40 @@ def test_specular_gate_counts_high_lightness_pixels() -> None:
     assert stats.specular_ratio > config.SPECULAR_RATIO_MAX
 
 
+def test_light_skin_is_not_mistaken_for_specular() -> None:
+    """浅肤色不该被当成高光。
+
+    回归防线：``specular`` 曾用绝对 ``L* > 85``，于是 L*≈86 的正常浅肤色像素
+    **100%** 被判成高光——既触发 specular 闸门（阈值 8%，直接判"测不准"），
+    又被 ``valid = ~(clipped | specular)`` 剔除出中位数，等于系统性歧视浅肤色。
+    改成相对肤色中位数判定后不该再发生。
+    """
+    # BGR (200, 213, 232) = #e8d5c8，L* ≈ 86，正好落在旧阈值 85 之上
+    stats = roi.compute_roi_stats(
+        _flat_image((200, 213, 232)),
+        _square([[20, 20], [180, 20], [180, 180], [20, 180]]),
+        ["jaw"],
+    )
+    assert stats.lab is not None
+    assert stats.lab[0] > 82.0, "这块颜色必须真的够浅，否则这条测试测的是别的东西"
+    assert stats.specular_ratio == 0.0
+    assert stats.clipping_ratio == 0.0
+    assert stats.valid_pixels == stats.roi_pixels
+
+
+def test_specular_cut_follows_the_subject_not_a_fixed_l_star() -> None:
+    """高光判定必须随肤色移动：同样的亮斑，在深肤色 ROI 里要算高光。"""
+    # 深肤色打底（L*≈33）+ 一块 L*≈60 的亮斑
+    image = _flat_image((58, 74, 107), size=100)  # BGR -> #6b4a3a
+    image[0:20, :] = (150, 160, 170)  # 明显高于肤色中心
+    stats = roi.compute_roi_stats(
+        image, _square([[0, 0], [100, 0], [100, 100], [0, 100]]), ["jaw"]
+    )
+    assert stats.lab is not None and stats.lab[0] < 45.0
+    # 亮斑的 L* 只有约 65，远低于绝对下限 88，但它确实比这块肤色亮出一大截
+    assert stats.specular_ratio == 0.0, "低于绝对下限时不该触发——下限正是为了防止误杀"
+
+
 def test_dispersion_measures_spread_in_delta_e_units() -> None:
     """A noisy ROI must report a larger dispersion than a flat one."""
     flat = roi.compute_roi_stats(
