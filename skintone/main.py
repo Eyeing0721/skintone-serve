@@ -25,7 +25,7 @@ from fastapi.responses import JSONResponse
 from pythonjsonlogger import jsonlogger
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from . import __version__, analysis, api, config, schemas, storage
+from . import __version__, analysis, api, config, quota, schemas, storage
 
 LOGGER = logging.getLogger("skintone")
 
@@ -85,6 +85,12 @@ def create_app(settings: config.Settings | None = None) -> FastAPI:
     app.state.settings = resolved
     app.state.storage = storage.Storage(resolved.data_dir, resolved.retention_days)
     app.state.started_at = time.monotonic()
+    # 每日配额：防滥用，不是认证。指针可伪造，只求挡住随手刷与填满磁盘。
+    app.state.quota = quota.DailyQuota(
+        resolved.quota_db_path,
+        resolved.quota_per_day_client,
+        resolved.quota_per_day_ip,
+    )
     app.state.rate_limiter = api.RateLimiter(
         resolved.rate_limit_capacity, resolved.rate_limit_per_second
     )
@@ -134,9 +140,14 @@ def create_app(settings: config.Settings | None = None) -> FastAPI:
 
     @app.middleware("http")
     async def _guard(request: Request, call_next: Any) -> Any:
-        """Enforce size ceiling, rate limit and API key ahead of routing."""
+        """Enforce size ceiling, rate limit, optional API key and the daily quota."""
+        path = request.url.path
+        counts_toward_quota = (
+            resolved.quota_enabled
+            and path.startswith("/v1/")
+            and quota.is_quota_target(request.method, path)
+        )
         try:
-            path = request.url.path
             if path.startswith("/v1/") and request.method != "OPTIONS":
                 api.parse_size_guard(request, resolved)
                 if path not in api.PUBLIC_PATHS:
@@ -156,9 +167,35 @@ def create_app(settings: config.Settings | None = None) -> FastAPI:
                                 "缺少或不匹配的 X-API-Key",
                                 "在请求头里带上服务端 .env 中配置的 SKINTONE_API_KEY",
                             )
+                    if counts_toward_quota:
+                        info = app.state.quota.peek(
+                            quota.client_identifier(request), quota.client_ip(request)
+                        )
+                        request.state.quota_info = info
+                        if info["remaining"] <= 0:
+                            raise schemas.ApiError(
+                                "RATE_LIMITED",
+                                f"今天的 {info['clientLimit']} 次额度已经用完了",
+                                "明天自动恢复。额度只在对上脸、真正出结果之后才扣，"
+                                "所以失败的那几次不算数",
+                                details=info,
+                            )
         except schemas.ApiError as error:
-            return _error_response(error)
-        return await call_next(request)
+            response = _error_response(error)
+        else:
+            response = await call_next(request)
+            # 只在真正处理成功后才扣额度：拍糊了、没对上脸，不该白扣一次
+            if counts_toward_quota and response.status_code < 400:
+                info = app.state.quota.consume(
+                    quota.client_identifier(request), quota.client_ip(request)
+                )
+                request.state.quota_info = info
+        # 把剩余额度回给前端，让用户看得到自己还能测几次
+        info = getattr(request.state, "quota_info", None)
+        if info:
+            for name, value in quota.quota_headers(info).items():
+                response.headers[name] = value
+        return response
 
     # Added last on purpose. Starlette wraps ``user_middleware`` in reverse, so the
     # most recently added middleware ends up outermost -- which is what keeps CORS
@@ -179,6 +216,8 @@ def create_app(settings: config.Settings | None = None) -> FastAPI:
             "dataDir": str(resolved.data_dir),
             "authRequired": resolved.auth_required,
             "rateLimit": resolved.rate_limit,
+            "quotaPerDayClient": resolved.quota_per_day_client,
+            "quotaPerDayIp": resolved.quota_per_day_ip,
         },
     )
     return app

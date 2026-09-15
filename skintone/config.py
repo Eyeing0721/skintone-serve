@@ -359,6 +359,13 @@ class Settings(BaseSettings):
     api_key: str = ""
     allowed_origins: str = "*"
     rate_limit: str = "30/minute"
+    #: 每日配额（防滥用，不是认证）。浏览器指纹来自 X-Client-Id，可被伪造；
+    #: 目的只是挡住随手刷与填满磁盘。设为 0 表示该项不限制。
+    quota_enabled: bool = True
+    quota_per_day_client: int = 5
+    quota_per_day_ip: int = 5
+    #: 配额库文件；留空则用 data_dir/quota.sqlite
+    quota_db: str = ""
     max_upload_mb: int = 20
     data_dir: Path = Path("./data")
     retention_days: int = 30
@@ -382,6 +389,11 @@ class Settings(BaseSettings):
     def auth_required(self) -> bool:
         """True when a non-empty API key was configured."""
         return bool(self.api_key)
+
+    @property
+    def quota_db_path(self) -> Path:
+        """Daily-quota database path (defaults to ``data_dir/quota.sqlite``)."""
+        return Path(self.quota_db) if self.quota_db else self.data_dir / "quota.sqlite"
 
     @property
     def max_upload_bytes(self) -> int:

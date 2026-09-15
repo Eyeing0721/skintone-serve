@@ -73,7 +73,9 @@ curl.exe http://127.0.0.1:8000/v1/health
 .\scripts\tunnel.ps1 url      # 打印对外地址
 ```
 
-暴露公网前的检查清单见 `docs/DEPLOY.md`——**尤其别把 `SKINTONE_API_KEY` 留空**。
+暴露公网前的检查清单见 `docs/DEPLOY.md`。**默认不需要 API 密钥**：防滥用靠的是每日额度
+（同一浏览器指纹或同一 IP 每天 5 次，且**只有成功出结果的请求才扣**，拍糊的不算）。
+需要真正的访问控制时再设 `SKINTONE_API_KEY`。
 
 ## 目录结构
 

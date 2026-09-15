@@ -38,15 +38,20 @@ Copy-Item .env.example .env  # 然后编辑 .env
 
 逐条确认，任何一条不过就别开隧道：
 
-- [ ] `SKINTONE_API_KEY` **非空**。留空等于任何人拿到域名都能往这台机器上传原图，会吃满磁盘
+- [ ] `SKINTONE_QUOTA_ENABLED=true`，且 `SKINTONE_QUOTA_PER_DAY_CLIENT` / `..._IP` 符合预期。
+      这是默认的防滥用手段（5 次/天/指纹 + 5 次/天/IP）。**手机运营商 CGNAT 会让大量用户
+      共用出口 IP**，真出现误伤就把 IP 上限抬高（例如 30），客户端保持 5
+- [ ] 想真正上锁（而不只是限流）时才设 `SKINTONE_API_KEY`；默认配置下它是空的
 - [ ] `SKINTONE_MAX_UPLOAD_MB` 已按磁盘余量确认（默认 20）
 - [ ] `SKINTONE_RATE_LIMIT` 已确认（默认 30/minute）
 - [ ] `SKINTONE_ALLOWED_ORIGINS` 只列前端实际域名，不要留 `*`
 - [ ] `SKINTONE_RETENTION_DAYS` 与磁盘容量匹配；确认启动时清理逻辑生效
 - [ ] 确认 `SKINTONE_HOST=127.0.0.1`，没有图省事写成 `0.0.0.0`
 - [ ] 确认 `.env` 与 `.cloudflared-token` 都没被提交（`git status` 干净）
-- [ ] 用 `curl.exe https://<域名>/v1/health` 确认经过隧道能通，且 `authRequired: true`
-- [ ] 不带 `X-API-Key` 请求 `/v1/analyze`，确认返回 `401` 而不是 `200`
+- [ ] 用 `curl.exe https://<域名>/v1/health` 确认经过隧道能通
+- [ ] 故意连发超过额度的分析请求，确认第 6 次返回 `429`，且响应体 `details.remaining` 为 0
+- [ ] 确认响应头里有 `X-Quota-Remaining`（注意经 Cloudflare 后头名会被小写化，
+      浏览器的 `Headers.get()` 大小写不敏感，用 curl 手测时要加 `(?i)`）
 
 ## 为什么必须 HTTPS
 

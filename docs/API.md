@@ -3,10 +3,24 @@
 基地址默认 `http://127.0.0.1:8000`。字段级完整契约（含参考卡几何、色块数值、
 置信度门禁阈值、错误码表）见仓库上一级的 `CONTRACT.md`，此处只列接口。
 
-**认证**：设置了 `SKINTONE_API_KEY` 时，除 `GET /v1/health` 外所有请求都要带
-`X-API-Key` 头；不匹配返回 `401`。
+**认证（默认关闭）**：面向大众的入口不该要求密钥——那一步会把绝大多数用户挡在门外。
+只有服务端设了 `SKINTONE_API_KEY` 时，除 `GET /v1/health` 外才需要带 `X-API-Key`，
+不匹配返回 `401`。
 
-**限流**：按 IP 令牌桶，默认 `SKINTONE_RATE_LIMIT`（30/minute），超限返回 `429`。
+**每日额度（默认开启）**：这是防滥用，**不是认证**。请求头 `X-Client-Id` 携带浏览器指纹
+（服务端哈希后存储，不存原始值），服务端按「同一指纹」与「同一 IP」各记一笔，任一用满即拒。
+默认两者都是 5 次/天，用 `SKINTONE_QUOTA_PER_DAY_CLIENT` / `SKINTONE_QUOTA_PER_DAY_IP`
+调整，设 0 表示该维度不限制。
+
+- 只有 `POST /v1/analyze` 与 `POST /v1/card/{id}/calibrate` 计入额度
+- **只有成功出结果的请求才扣额度**：拍糊、没对上脸、参数错误都不扣
+- 每个响应（包括 `429`）都带回 `X-Quota-Limit` / `X-Quota-Remaining` / `X-Quota-Day`
+- 用满时返回 `429`，错误码仍是 `RATE_LIMITED`，`details` 里带完整用量
+
+> 指纹可以被伪造，所以这条防线的定位是"挡住随手刷脚本与陌生人填满磁盘"。
+> 需要真正的访问控制就设 `SKINTONE_API_KEY`。
+
+**限流**：另有按 IP 的令牌桶，默认 `SKINTONE_RATE_LIMIT`（30/minute），超限返回 `429`。
 
 ---
 

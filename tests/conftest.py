@@ -42,6 +42,8 @@ def settings(tmp_path: Path) -> config.Settings:
         api_key="",
         allowed_origins="*",
         retention_days=30,
+        # 配额另有专门的测试文件；其它用例不该被每日次数限制干扰
+        quota_enabled=False,
     )
 
 
